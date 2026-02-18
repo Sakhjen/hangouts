@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: hangouts_db
+    restart: always
+    environment:
+      POSTGRES_DB: hangouts
+      POSTGRES_USER: hangouts_admin
+      POSTGRES_PASSWORD: supersecretpassword
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hangouts_admin -d hangouts"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: hangouts_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  app:
+    build: .
+    container_name: hangouts_app
+    restart: always
+    volumes:
+      - .:/app  # ← Корректный mount ТОЛЬКО этого!
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy  # ✅ Уже есть!
+      redis:
+        condition: service_started  # ✅ Уже есть!
+    env_file:  # ← .env как env_file, НЕ volume!
+      - .env
+    # ✅ ТОЛЬКО ЭТО добавлено:
+    command: >  
+      sh -c "
+        echo '⏳ Ожидание БД...';
+        until pg_isready -h db -U hangouts_admin -d hangouts; do
+          sleep 2;
+        done;
+        echo '✅ БД готова. Применяем миграции Alembic...';
+        alembic upgrade head;
+        echo '🚀 Запускаем FastAPI...';
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
+      "
+
+volumes:
+  postgres_data:
